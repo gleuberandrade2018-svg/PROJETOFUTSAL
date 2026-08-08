@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vila Real Futsal — Web V1.1</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/html5-qrcode" defer></script>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f4f6f8;color:#17202a}
+header{background:#101820;color:#fff;padding:16px}.wrap{max-width:1250px;margin:auto;padding:20px}
+nav{background:#fff;padding:10px;display:flex;gap:7px;flex-wrap:wrap;border-bottom:1px solid #ddd}
+button{padding:9px 12px;border:0;border-radius:7px;background:#101820;color:#fff;cursor:pointer}button.green{background:#168548}
+.card{background:#fff;border:1px solid #e0e5e8;border-radius:12px;padding:18px;margin:12px 0}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.field{margin:9px 0}.field label{display:block;font-size:12px;margin-bottom:5px}.field input,.field select{width:100%;padding:10px;border:1px solid #cfd7dc;border-radius:7px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid #edf0f2;font-size:13px}
+.msg{padding:10px;border-radius:8px;background:#eef7ff;margin-top:10px}.err{background:#fff0ef;color:#a52219}.ok{color:#168548;font-weight:bold}
+.hidden{display:none}.login{max-width:430px;margin:8vh auto}.qrbox{max-width:420px;margin:auto}.center{text-align:center}
+.role{font-size:12px;background:#eaf1f5;padding:5px 9px;border-radius:20px}
+@media(max-width:750px){.grid{grid-template-columns:1fr 1fr}}@media(max-width:500px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><div class="wrap"><b>VILA REAL FUTSAL</b> — Gestão Web V1.1</div></header>
+
+<div id="login" class="wrap login">
+<div class="card">
+<h2>Entrar</h2>
+<div class="field"><label>E-mail</label><input id="email" type="email"></div>
+<div class="field"><label>Senha</label><input id="password" type="password"></div>
+<button class="green" style="width:100%" onclick="login()">Entrar</button>
+<p id="loginMsg"></p>
+<p style="font-size:11px;color:#66747c">Na primeira configuração, use a tela de conexão do banco.</p>
+</div>
+</div>
+
+<div id="app" class="hidden">
+<nav id="nav"></nav>
+<main class="wrap" id="content"></main>
+</div>
+
+<script>
+let db=null, currentUser=null, currentProfile=null, scanner=null;
+
+function connect(){
+ const u=localStorage.getItem("VRF_URL"), k=localStorage.getItem("VRF_KEY");
+ if(u&&k) db=window.supabase.createClient(u,k);
+}
+async function login(){
+ connect();
+ if(!db){loginMsg.textContent="Configure o Supabase antes de entrar.";return}
+ const {data,error}=await db.auth.signInWithPassword({email:email.value,password:password.value});
+ if(error) loginMsg.textContent=error.message;
+ else await start(data.user);
+}
+async function start(user){
+ currentUser=user;
+ const {data:p,error}=await db.from("profiles").select("id,full_name,role,active").eq("id",user.id).single();
+ if(error||!p||!p.active){await db.auth.signOut();loginMsg.textContent="Usuário sem perfil autorizado.";return}
+ currentProfile=p; login.classList.add("hidden");app.classList.remove("hidden");renderNav();page("dash");
+}
+async function logout(){if(db)await db.auth.signOut();location.reload()}
+
+function renderNav(){
+ const r=currentProfile.role;
+ const items=[
+  ["dash","🏠 Dashboard",["ADMIN","COORDINATOR","TEACHER","OPERATOR"]],
+  ["students","👥 Alunos",["ADMIN","COORDINATOR","TEACHER"]],
+  ["new","➕ Cadastrar",["ADMIN","COORDINATOR"]],
+  ["cats","⚽ Categorias",["ADMIN","COORDINATOR"]],
+  ["train","📅 Treinos",["ADMIN","COORDINATOR","TEACHER"]],
+  ["qr","📷 Presença QR",["ADMIN","COORDINATOR","TEACHER","OPERATOR"]],
+  ["reports","📊 Relatórios",["ADMIN","COORDINATOR","TEACHER"]],
+  ["users","🔐 Usuários",["ADMIN"]],
+  ["settings","⚙️ Configuração",["ADMIN"]]
+ ];
+ nav.innerHTML=items.filter(x=>x[2].includes(r)).map(x=>`<button onclick="page('${x[0]}')">${x[1]}</button>`).join("")+
+ `<span class="role">${currentProfile.full_name} — ${r}</span><button onclick="logout()">Sair</button>`;
+}
+function page(p){
+ const f={dash,students,new:newStudent,cats,train,qr,reports,users,settings}[p]; if(f)f();
+}
+async function dash(){
+ const [s,t,a]=await Promise.all([count("students"),count("trainings"),count("attendances")]);
+ content.innerHTML=`<h2>Dashboard</h2><div class="grid">
+ <div class="card"><small>ALUNOS ATIVOS</small><h2>${s}</h2></div>
+ <div class="card"><small>TREINOS</small><h2>${t}</h2></div>
+ <div class="card"><small>PRESENÇAS</small><h2>${a}</h2></div>
+ <div class="card"><small>USUÁRIO</small><h3>${currentProfile.role}</h3></div></div>
+ <div class="card"><h3>Sistema online</h3><p>QR Code por câmera, perfis e controle de acesso habilitados.</p></div>`;
+}
+async function count(t){const r=await db.from(t).select("*",{count:"exact",head:true});return r.count||0}
+
+async function students(){
+ const r=await db.from("students").select("*").order("full_name");
+ content.innerHTML=`<h2>Alunos</h2><div class="card"><table><tr><th>Nº</th><th>Nome</th><th>Nascimento</th><th>Categoria</th><th>Status</th></tr>
+ ${(r.data||[]).map(x=>`<tr><td>${x.student_number}</td><td>${x.full_name}</td><td>${x.birth_date}</td><td>${x.category_name||"-"}</td><td>${x.active?"Ativo":"Inativo"}</td></tr>`).join("")}</table></div>`;
+}
+function newStudent(){
+ content.innerHTML=`<h2>Cadastrar aluno</h2><div class="card"><div class="grid" style="grid-template-columns:1fr 1fr">
+ <div class="field"><label>Nome completo</label><input id="n"></div><div class="field"><label>RG</label><input id="rg"></div>
+ <div class="field"><label>Data de nascimento</label><input id="bd" type="date"></div><div class="field"><label>Pai/Mãe/Responsável</label><input id="g"></div>
+ <div class="field"><label>Telefone</label><input id="ph"></div><div class="field"><label>Emergência</label><input id="em"></div>
+ <div class="field"><label>Categoria</label><input id="cat" placeholder="Sub-10"></div></div>
+ <button class="green" onclick="saveStudent()">Salvar aluno</button><p id="sm"></p></div>`;
+}
+async function saveStudent(){
+ const q=await db.from("students").select("student_number").order("student_number",{ascending:false}).limit(1);
+ const num=q.data?.length?String(parseInt(q.data[0].student_number.replace(/\D/g,""))+1).padStart(6,"0"):"000001";
+ const r=await db.from("students").insert({student_number:"VRF-"+num,full_name:n.value,rg:rg.value,birth_date:bd.value,guardian_name:g.value,guardian_phone:ph.value,emergency_phone:em.value,category_name:cat.value,active:true});
+ sm.textContent=r.error?r.error.message:"Aluno cadastrado. O QR Code foi gerado automaticamente.";
+ if(!r.error)students();
+}
+async function cats(){
+ const r=await db.from("categories").select("*").order("min_age");
+ content.innerHTML=`<h2>Categorias</h2><div class="card"><button onclick="addCat()">+ Categoria</button><table><tr><th>Nome</th><th>Mín.</th><th>Máx.</th><th>Status</th></tr>
+ ${(r.data||[]).map(x=>`<tr><td>${x.name}</td><td>${x.min_age}</td><td>${x.max_age}</td><td>${x.active?"Ativa":"Inativa"}</td></tr>`).join("")}</table></div>`;
+}
+async function addCat(){let n=prompt("Nome"),mi=prompt("Idade mínima"),ma=prompt("Idade máxima");if(n)await db.from("categories").insert({name:n,min_age:+mi,max_age:+ma});cats()}
+async function train(){
+ const r=await db.from("trainings").select("*").order("training_date",{ascending:false});
+ content.innerHTML=`<h2>Treinos</h2><div class="card"><button onclick="addTrain()">+ Treino</button><table><tr><th>Data</th><th>Categoria</th><th>Início</th><th>Local</th></tr>
+ ${(r.data||[]).map(x=>`<tr><td>${x.training_date}</td><td>${x.category_name||"-"}</td><td>${x.start_time}</td><td>${x.location||"-"}</td></tr>`).join("")}</table></div>`;
+}
+async function addTrain(){let d=prompt("Data AAAA-MM-DD"),c=prompt("Categoria"),s=prompt("Início HH:MM"),e=prompt("Fim HH:MM"),l=prompt("Local");if(d)await db.from("trainings").insert({training_date:d,category_name:c,start_time:s,end_time:e,location:l});train()}
+
+async function qr(){
+ const t=await db.from("trainings").select("*").order("training_date",{ascending:false}).limit(1).single();
+ content.innerHTML=`<h2>Presença por QR Code</h2><div class="card center">
+ <p>Selecione um treino e aponte a câmera para o QR Code do aluno.</p>
+ <select id="trainingSelect" style="padding:10px;width:100%;max-width:500px"></select>
+ <div id="reader" class="qrbox"></div><div id="qrMsg"></div></div>`;
+ const ts=await db.from("trainings").select("*").order("training_date",{ascending:false}).limit(30);
+ trainingSelect.innerHTML=(ts.data||[]).map(x=>`<option value="${x.id}">${x.training_date} — ${x.category_name||""} — ${x.start_time}</option>`).join("");
+ if(window.Html5Qrcode) startScanner(); else qrMsg.innerHTML='<div class="msg err">Biblioteca da câmera ainda carregando. Recarregue a página.</div>';
+}
+async function startScanner(){
+ scanner=new Html5Qrcode("reader");
+ try{
+  await scanner.start({facingMode:"environment"},{fps:10,qrbox:{width:250,height:250}},async text=>{
+   await scanner.stop(); await registerAttendance(text.trim(),trainingSelect.value);
+  },()=>{});
+ }catch(e){qrMsg.innerHTML=`<div class="msg err">Não foi possível abrir a câmera. Autorize o acesso à câmera e use o site em HTTPS.</div>`}
+}
+async function registerAttendance(qrText,trainingId){
+ const s=await db.from("students").select("*").eq("public_qr_id",qrText).single();
+ if(s.error){qrMsg.innerHTML='<div class="msg err">QR Code não reconhecido.</div>';return}
+ const r=await db.from("attendances").insert({student_id:s.data.id,training_id:trainingId,status:"PRESENT",method:"QR",recorded_by:currentUser.id,client_event_id:crypto.randomUUID()});
+ if(r.error&&r.error.code==="23505")qrMsg.innerHTML='<div class="msg">⚠️ Presença já registrada para este treino.</div>';
+ else if(r.error)qrMsg.innerHTML=`<div class="msg err">${r.error.message}</div>`;
+ else qrMsg.innerHTML=`<div class="msg"><span class="ok">PRESENÇA CONFIRMADA</span><br>${s.data.full_name}<br>Nº ${s.data.student_number}</div><br><button onclick="qr()">Nova leitura</button>`;
+}
+async function reports(){
+ const r=await db.from("attendances").select("status,recorded_at,student_id,training_id").order("recorded_at",{ascending:false}).limit(100);
+ content.innerHTML=`<h2>Relatórios</h2><div class="card"><table><tr><th>Status</th><th>Data/Hora</th><th>Aluno</th><th>Treino</th></tr>
+ ${(r.data||[]).map(x=>`<tr><td>${x.status}</td><td>${new Date(x.recorded_at).toLocaleString("pt-BR")}</td><td>${x.student_id}</td><td>${x.training_id}</td></tr>`).join("")}</table></div>`;
+}
+async function users(){
+ const r=await db.from("profiles").select("id,full_name,role,active").order("full_name");
+ content.innerHTML=`<h2>Usuários e permissões</h2><div class="card"><p>Criação de contas deve ser feita no Supabase Auth. Aqui o administrador define o perfil.</p>
+ <table><tr><th>Nome</th><th>Perfil</th><th>Status</th></tr>${(r.data||[]).map(x=>`<tr><td>${x.full_name}</td><td>${x.role}</td><td>${x.active?"Ativo":"Inativo"}</td></tr>`).join("")}</table></div>`;
+}
+function settings(){
+ const u=localStorage.getItem("VRF_URL")||"",k=localStorage.getItem("VRF_KEY")||"";
+ content.innerHTML=`<h2>Configuração</h2><div class="card"><p>Supabase URL e chave pública.</p>
+ <div class="field"><label>Project URL</label><input id="su" value="${u}"></div>
+ <div class="field"><label>Publishable/anon key</label><input id="sk" value="${k}"></div>
+ <button class="green" onclick="saveCfg()">Salvar conexão</button>
+ <div class="msg">Use somente a chave pública. Nunca coloque service_role no navegador.</div></div>`;
+}
+function saveCfg(){localStorage.setItem("VRF_URL",su.value.trim());localStorage.setItem("VRF_KEY",sk.value.trim());alert("Salvo. Recarregue e faça login.");location.reload()}
+
+connect();
+if(db) db.auth.getSession().then(r=>{if(r.data.session)start(r.data.session.user)});
+</script>
+</body></html>
